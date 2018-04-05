@@ -125,7 +125,7 @@ module Pod
       def add_inherited_to_plural(hash)
         hash.map do |key, value|
           if PLURAL_SETTINGS.include?(key)
-            raise ArgumentError unless value.is_a? Array
+            raise ArgumentError, "#{key} is a plural setting, cannot have #{value.inspect} as its value" unless value.is_a? Array
 
             value = "$(inherited) #{quote_array(value)}"
           else
