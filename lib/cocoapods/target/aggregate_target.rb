@@ -320,5 +320,9 @@ module Pod
     def relative_to_srcroot(path)
       path.relative_path_from(client_root).to_s
     end
+
+    def create_build_settings
+      BuildSettings::Aggregate.new(self, 'release')
+    end
   end
 end

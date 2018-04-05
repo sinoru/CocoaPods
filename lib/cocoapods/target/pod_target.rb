@@ -637,5 +637,9 @@ module Pod
         Specification.root_name(dependency.name) == pod_name
       end
     end
+
+    def create_build_settings
+      BuildSettings::Pod.new(self, false)
+    end
   end
 end

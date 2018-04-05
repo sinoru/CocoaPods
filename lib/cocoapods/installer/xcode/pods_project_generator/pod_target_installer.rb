@@ -391,8 +391,8 @@ module Pod
           #
           def create_xcconfig_file
             path = target.xcconfig_path
-            xcconfig_gen = Generator::XCConfig::PodXCConfig.new(target)
-            update_changed_file(xcconfig_gen, path)
+            xcconfig = target.build_settings.xcconfig
+            xcconfig.save_as(path)
             xcconfig_file_ref = add_file_to_support_group(path)
 
             native_target.build_configurations.each do |c|
