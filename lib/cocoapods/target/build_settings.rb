@@ -399,10 +399,15 @@ module Pod
 
         def self.from_pod_targets(setting)
           define_method(setting) do
-            pod_targets.flat_map do |pod_target|
+            value = pod_targets.flat_map do |pod_target|
               settings = pod_target.build_settings
               settings.public_send("#{setting}_to_import") + settings.public_send(setting)
-            end.uniq.sort
+            end
+            value.map!(&:to_s)
+            value.uniq!
+            value.sort!
+
+            value
           end
           memoized(setting)
         end
@@ -489,7 +494,9 @@ module Pod
         # @return [Version] the SWIFT_VERSION of the target being integrated
         #
         memoized def target_swift_version
-          Version.new target.target_definition.swift_version unless target.target_definition.swift_version.blank?
+          swift_version = target.target_definition.swift_version
+          swift_version = nil if swift_version.blank?
+          Version.new(swift_version)
         end
 
         EMBED_STANDARD_LIBRARIES_MINIMUM_VERSION = Version.new('2.3')
