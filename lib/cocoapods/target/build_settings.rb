@@ -277,7 +277,7 @@ module Pod
         end
 
         memoized build_setting def library_search_paths
-          vendored = vendored_libraries.map {|f| File.join '${PODS_ROOT}', f.dirname.relative_path_from(target.sandbox.root) }
+          vendored = vendored_library_search_paths
           vendored.concat dependent_targets.flat_map { |t| t.build_settings.library_search_paths_to_import }
           vendored.tap(&:sort!)
         end
@@ -290,23 +290,31 @@ module Pod
           file_accessors.flat_map(&:vendored_frameworks)
         end
 
-        memoized def library_search_paths_to_import
-          return [] unless !target.requires_frameworks? && target.should_build?
+        memoized def vendored_library_search_paths
+          vendored_libraries.map {|f| File.join '${PODS_ROOT}', f.dirname.relative_path_from(target.sandbox.root) }
+        end
 
-          [target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE)]
+        memoized def library_search_paths_to_import
+          return vendored_library_search_paths unless !target.requires_frameworks? && target.should_build?
+
+          vendored_library_search_paths + [target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE)]
         end
 
         memoized build_setting def framework_search_paths
           paths = dependent_targets.flat_map { |t| t.build_settings.framework_search_paths_to_import }
-          paths.concat file_accessors.flat_map(&:vendored_frameworks).map {|f| File.join '${PODS_ROOT}', f.dirname.relative_path_from(target.sandbox.root) }
+          paths.concat vendored_framework_search_paths
           paths.unshift "$(PLATFORM_DIR)/Developer/Library/Frameworks" if test_xcconfig? || frameworks.include?("XCTest") || frameworks.include?("SenTestingKit")
           paths.tap(&:sort!)
         end
 
-        memoized def framework_search_paths_to_import
-          return [] unless target.requires_frameworks? && target.should_build?
+        memoized def vendored_framework_search_paths
+          file_accessors.flat_map(&:vendored_frameworks).map {|f| File.join '${PODS_ROOT}', f.dirname.relative_path_from(target.sandbox.root) }
+        end
 
-          [target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE)]
+        memoized def framework_search_paths_to_import
+          return vendored_framework_search_paths unless target.requires_frameworks? && target.should_build?
+
+          vendored_framework_search_paths + [target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE)]
         end
 
         memoized build_setting def other_swift_flags
@@ -415,11 +423,11 @@ module Pod
 
         memoized def header_search_paths
           if target.requires_frameworks?
-            # if pod_targets.all?(&:should_build?)
+            if pod_targets.all?(&:should_build?)
               []
-            # else
-            #   target.sandbox.public_headers.search_paths(target.platform)
-            # end
+            else
+              target.sandbox.public_headers.search_paths(target.platform)
+            end
           else
             target.sandbox.public_headers.search_paths(target.platform)
           end
