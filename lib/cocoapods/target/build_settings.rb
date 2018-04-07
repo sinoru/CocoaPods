@@ -213,11 +213,15 @@ module Pod
         end
 
         memoized add_to_import_if_test def frameworks
-          spec_consumers.flat_map(&:frameworks).uniq.sort
+          vendored = vendored_frameworks.map {|l| File.basename(l, '.framework') }
+          vendored.concat spec_consumers.flat_map(&:frameworks)
+          vendored.tap(&:uniq!).tap(&:sort!)
         end
 
         memoized add_to_import_if_test def libraries
-          spec_consumers.flat_map(&:libraries).uniq.sort
+          vendored = vendored_libraries.map {|l| File.basename(l, l.extname).sub(/\Alib/, '') }
+          vendored.concat spec_consumers.flat_map(&:libraries)
+          vendored.tap(&:uniq!).tap(&:sort!)
         end
 
         memoized def module_map_files
@@ -264,7 +268,7 @@ module Pod
           if target.requires_frameworks? && !test_xcconfig?
             []
           else
-            target.header_search_paths.sort
+            target.header_search_paths
           end
         end
 
@@ -273,27 +277,36 @@ module Pod
         end
 
         memoized build_setting def library_search_paths
-          dependent_targets.flat_map { |t| t.build_settings.library_search_paths_to_import }.sort
+          vendored = vendored_libraries.map {|f| File.join '${PODS_ROOT}', f.dirname.relative_path_from(target.sandbox.root) }
+          vendored.concat dependent_targets.flat_map { |t| t.build_settings.library_search_paths_to_import }
+          vendored.tap(&:sort!)
+        end
+
+        memoized def vendored_libraries
+          file_accessors.flat_map(&:vendored_libraries)
+        end
+
+        memoized def vendored_frameworks
+          file_accessors.flat_map(&:vendored_frameworks)
         end
 
         memoized def library_search_paths_to_import
-          vendored = file_accessors.flat_map(&:vendored_frameworks).map {|f| File.join '${PODS_ROOT}', f.dirname.relative_path_from(target.sandbox.root) }
-          return vendored unless !target.requires_frameworks? && target.should_build?
+          return [] unless !target.requires_frameworks? && target.should_build?
 
-          vendored << target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE)
+          [target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE)]
         end
 
         memoized build_setting def framework_search_paths
           paths = dependent_targets.flat_map { |t| t.build_settings.framework_search_paths_to_import }
+          paths.concat file_accessors.flat_map(&:vendored_frameworks).map {|f| File.join '${PODS_ROOT}', f.dirname.relative_path_from(target.sandbox.root) }
           paths.unshift "$(PLATFORM_DIR)/Developer/Library/Frameworks" if test_xcconfig? || frameworks.include?("XCTest") || frameworks.include?("SenTestingKit")
           paths.tap(&:sort!)
         end
 
         memoized def framework_search_paths_to_import
-          vendored = file_accessors.flat_map(&:vendored_frameworks).map {|f| File.join '${PODS_ROOT}', f.dirname.relative_path_from(target.sandbox.root) }
-          return vendored unless target.requires_frameworks? && target.should_build?
+          return [] unless target.requires_frameworks? && target.should_build?
 
-          vendored << target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE)
+          [target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE)]
         end
 
         memoized build_setting def other_swift_flags
