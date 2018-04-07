@@ -5,6 +5,7 @@ module Pod
         FRAMEWORK_SEARCH_PATHS
         GCC_PREPROCESSOR_DEFINITIONS
         HEADER_SEARCH_PATHS
+        LD_RUNPATH_SEARCH_PATHS
         LIBRARY_SEARCH_PATHS
         OTHER_CFLAGS
         OTHER_LDFLAGS
@@ -41,10 +42,6 @@ module Pod
         @target = target
       end
 
-      memoized build_setting def framework_search_paths
-        []
-      end
-
       build_setting def gcc_preprocessor_definitions
         %w[COCOAPODS=1]
       end
@@ -57,7 +54,11 @@ module Pod
         []
       end
 
-      build_setting def other_cflags
+      memoized build_setting def other_cflags
+        module_map_files.map {|f| "-fmodule-map-file=#{f}" }
+      end
+
+      def module_map_files
         []
       end
 
@@ -77,7 +78,7 @@ module Pod
         false
       end
 
-      memoized build_setting  def other_ldflags
+      memoized build_setting def other_ldflags
         ld_flags = []
         ld_flags << '-ObjC' if requires_objc_linker_flag?
         if target.podfile.set_arc_compatibility_flag? &&
@@ -89,12 +90,9 @@ module Pod
         ld_flags
       end
 
-      build_setting def other_swift_flags
-        []
-      end
-
-      build_setting def pods_root
-        ''
+      memoized build_setting def other_swift_flags
+        return unless target.uses_swift?
+        %w[-D COCOAPODS] + module_map_files.flat_map {|f| ['-Xcc', "-fmodule-map-file=#{f}"] }
       end
 
       build_setting def swift_active_compilation_conditions
@@ -109,13 +107,37 @@ module Pod
         '${BUILD_DIR}'
       end
 
+      memoized build_setting def code_sign_identity
+        return unless target.requires_frameworks?
+        return unless target.platform.to_sym == :osx
+        ''
+      end
+
       build_setting def pods_configuration_build_dir
         '${PODS_BUILD_DIR}/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)'
+      end
+
+      def _ld_runpath_search_paths(requires_host_target: false, test_bundle: false)
+        if target.platform.symbolic_name == :osx
+          ["'@executable_path/../Frameworks'",
+            test_bundle ? "'@loader_path/../Frameworks'" : "'@loader_path/Frameworks'"]
+        else
+          paths = [
+            "'@executable_path/Frameworks'",
+            "'@loader_path/Frameworks'",
+          ]
+          paths << "'@executable_path/../../Frameworks'" if requires_host_target
+          paths
+        end
       end
 
       memoized def xcconfig
         settings = add_inherited_to_plural(to_h)
         Xcodeproj::Config.new(settings)
+      end
+
+      def save_as(path)
+        xcconfig.save_as(path)
       end
 
       def to_h
@@ -124,6 +146,7 @@ module Pod
 
       def add_inherited_to_plural(hash)
         hash.map do |key, value|
+          next [key, '$(inherited)'] if value.nil?
           if PLURAL_SETTINGS.include?(key)
             raise ArgumentError, "#{key} is a plural setting, cannot have #{value.inspect} as its value" unless value.is_a? Array
 
@@ -138,7 +161,12 @@ module Pod
 
       def quote_array(array, prefix: nil)
         array.map do |element|
-          if element =~ /[\$\[\]\ ]/
+          case element
+          when /\A([\w-]+?)=(.+)\z/
+            key, value = $1, $2
+            value = %("#{value}") if value =~ /[^\w\d]/
+            %(#{key}=#{value})
+          when /[\$\[\]\ ]/
             %("#{element}")
           else
             element
@@ -164,6 +192,15 @@ module Pod
           (@build_settings_names ||= []).concat(BuildSettings.build_settings_names)
         end
 
+        def self.add_to_import_if_test(method_name)
+          method = instance_method(method_name)
+          define_method(method_name) do
+            res = method.bind(self).call
+            res = public_send("#{method_name}_to_import") + res if test_xcconfig?
+            res
+          end
+        end
+
         def initialize(target, test_xcconfig)
           super(target)
           @test_xcconfig = test_xcconfig
@@ -175,24 +212,48 @@ module Pod
           []
         end
 
-        memoized def frameworks
-          target.spec_consumers.flat_map(&:frameworks)
+        memoized add_to_import_if_test def frameworks
+          spec_consumers.flat_map(&:frameworks).uniq.sort
         end
 
-        def pods_root
+        memoized add_to_import_if_test def libraries
+          spec_consumers.flat_map(&:libraries).uniq.sort
+        end
+
+        memoized def module_map_files
+          dependent_targets.map {|t| t.build_settings.module_map_file_to_import }.compact.sort
+        end
+
+        memoized def module_map_file_to_import
+          return if target.requires_frameworks?
+          return unless target.defines_module?
+
+          if target.uses_swift?
+            # for swift, we have a custom build phase that copies in the module map, appending the .Swift module
+            "${PODS_CONFIGURATION_BUILD_DIR}/#{target.label}/#{target.product_module_name}.modulemap"
+          else
+            "${PODS_ROOT}/#{target.module_map_path.relative_path_from(target.sandbox.root)}"
+          end
+        end
+
+        memoized def spec_consumers
+          target.spec_consumers.select {|c| c.spec.test_specification? == test_xcconfig? }
+        end
+
+        build_setting def pods_root
           '${SRCROOT}'
         end
 
         memoized def libraries_to_import
-          if target.requires_frameworks?
-            []
-          else
+          if !target.requires_frameworks? && target.should_build?
             [target.product_basename]
+          else
+            []
           end
         end
 
         memoized def frameworks_to_import
-          if target.requires_frameworks?
+          if target.requires_frameworks? && target.should_build?
             [target.product_basename]
           else
             []
@@ -200,19 +261,59 @@ module Pod
         end
 
         memoized def header_search_paths
-          if target.requires_frameworks?
-
+          if target.requires_frameworks? && !test_xcconfig?
+            []
           else
-            target.header_search_paths
+            target.header_search_paths.sort
           end
         end
 
+        memoized def xcconfig
+          super.merge(pod_target_xcconfig)
+        end
+
+        memoized build_setting def library_search_paths
+          dependent_targets.flat_map { |t| t.build_settings.library_search_paths_to_import }.sort
+        end
+
         memoized def library_search_paths_to_import
-          if target.requires_frameworks?
-            []
-          else
-            %W[ ${PODS_CONFIGURATION_BUILD_DIR}/#{target.product_basename} ]
-          end
+          vendored = file_accessors.flat_map(&:vendored_frameworks).map {|f| File.join '${PODS_ROOT}', f.dirname.relative_path_from(target.sandbox.root) }
+          return vendored unless !target.requires_frameworks? && target.should_build?
+
+          vendored << target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE)
+        end
+
+        memoized build_setting def framework_search_paths
+          paths = dependent_targets.flat_map { |t| t.build_settings.framework_search_paths_to_import }
+          paths.unshift "$(PLATFORM_DIR)/Developer/Library/Frameworks" if test_xcconfig? || frameworks.include?("XCTest") || frameworks.include?("SenTestingKit")
+          paths.tap(&:sort!)
+        end
+
+        memoized def framework_search_paths_to_import
+          vendored = file_accessors.flat_map(&:vendored_frameworks).map {|f| File.join '${PODS_ROOT}', f.dirname.relative_path_from(target.sandbox.root) }
+          return vendored unless target.requires_frameworks? && target.should_build?
+
+          vendored << target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE)
+        end
+
+        memoized build_setting def other_swift_flags
+          return unless target.uses_swift?
+          super +
+            if !target.requires_frameworks? && target.defines_module? && !test_xcconfig?
+              %w[ -import-underlying-module -Xcc -fmodule-map-file=${SRCROOT}/${MODULEMAP_FILE} ]
+            else
+              []
+            end
+        end
+
+        memoized build_setting def swift_include_paths
+          dependent_targets.flat_map {|t| t.build_settings.swift_include_paths_to_import }
+        end
+
+        memoized def swift_include_paths_to_import
+          return [] unless target.uses_swift? && !target.requires_frameworks?
+
+          [target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE)]
         end
 
         build_setting def pods_target_srcroot
@@ -223,12 +324,42 @@ module Pod
           'YES'
         end
 
+        def requires_objc_linker_flag?
+          test_xcconfig?
+        end
+
         build_setting def product_bundle_identifier
           'org.cocoapods.${PRODUCT_NAME:rfc1034identifier}'
         end
 
         memoized build_setting def configuration_build_dir
+          return if test_xcconfig?
           target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE)
+        end
+
+        memoized def dependent_targets
+          targets = target.dependent_targets
+          targets += [target] if test_xcconfig?
+          targets
+        end
+
+        memoized def pod_target_xcconfig
+          config = {}
+
+          spec_consumers.each do |consumer|
+            config.update(consumer.pod_target_xcconfig)
+          end
+
+          config
+        end
+
+        memoized def file_accessors
+          target.file_accessors.select {|fa| fa.spec.test_specification? == test_xcconfig? }
+        end
+
+        memoized build_setting def ld_runpath_search_paths
+          return unless test_xcconfig?
+          _ld_runpath_search_paths(test_bundle: true)
         end
       end
 
@@ -255,14 +386,27 @@ module Pod
           memoized(setting)
         end
 
+        memoized def xcconfig
+          super.merge(merged_user_target_xcconfigs)
+        end
+
         from_pod_targets :libraries
 
         from_pod_targets :library_search_paths
 
         from_pod_targets :frameworks
 
+        build_setting from_pod_targets :framework_search_paths
+
+        from_pod_targets :swift_include_paths
+
         memoized def header_search_paths
           if target.requires_frameworks?
+            # if pod_targets.all?(&:should_build?)
+              []
+            # else
+            #   target.sandbox.public_headers.search_paths(target.platform)
+            # end
           else
             target.sandbox.public_headers.search_paths(target.platform)
           end
@@ -273,11 +417,23 @@ module Pod
         end
 
         memoized def other_cflags
-          header_search_paths.flat_map {|p| ['-isystem', p] }
+          super + header_search_paths.flat_map {|p| ['-isystem', p] } +
+            pod_targets.select {|pt| pt.should_build? && pt.requires_frameworks? }.flat_map do |target|
+              ['-iquote', "#{target.build_product_path}/Headers"]
+            end
         end
 
-        memoized def pods_root
+        memoized build_setting def pods_root
           target.relative_pods_root
+        end
+
+        memoized build_setting def ld_runpath_search_paths
+          return unless target.requires_frameworks? || vendored_dynamic_artifacts.any?
+          _ld_runpath_search_paths(requires_host_target: target.requires_host_target?)
+        end
+
+        memoized def vendored_dynamic_artifacts
+          pod_targets.flat_map(&:file_accessors).flat_map(&:vendored_dynamic_artifacts)
         end
 
         memoized def requires_objc_linker_flag?
@@ -285,14 +441,44 @@ module Pod
           includes_static_libs ||= pod_targets.flat_map(&:file_accessors).any? { |fa| !fa.vendored_static_artifacts.empty? }
         end
 
+        memoized def module_map_files
+          pod_targets.map {|t| t.build_settings.module_map_file_to_import }.compact.sort
+        end
+
+        memoized build_setting def always_embed_swift_standard_libraries
+          return unless must_embed_swift?
+          return if target_swift_version < EMBED_STANDARD_LIBRARIES_MINIMUM_VERSION
+
+          'YES'
+        end
+
+        memoized build_setting def embedded_content_contains_swift
+          return unless must_embed_swift?
+          return if target_swift_version >= EMBED_STANDARD_LIBRARIES_MINIMUM_VERSION
+
+          'YES'
+        end
+
+        memoized def must_embed_swift?
+          !target.requires_host_target? && pod_targets.any?(&:uses_swift?)
+        end
+
         # !@group Private Helpers
+
+        # @return [Version] the SWIFT_VERSION of the target being integrated
+        #
+        memoized def target_swift_version
+          Version.new target.target_definition.swift_version unless target.target_definition.swift_version.blank?
+        end
+
+        EMBED_STANDARD_LIBRARIES_MINIMUM_VERSION = Version.new('2.3')
 
         # Returns the {PodTarget}s which are active for the current
         # configuration name.
         #
         # @return [Array<PodTarget>]
         #
-        def pod_targets
+        memoized def pod_targets
           target.pod_targets_for_build_configuration(configuration_name)
         end
 
@@ -316,7 +502,7 @@ module Pod
         #
         # @return [Hash{String, String}]
         #
-        def merged_user_target_xcconfigs
+        memoized def merged_user_target_xcconfigs
           settings = user_target_xcconfig_values_by_consumer_by_key
           settings.each_with_object({}) do |(key, values_by_consumer), xcconfig|
             uniq_values = values_by_consumer.values.uniq
@@ -330,7 +516,7 @@ module Pod
               else
                 xcconfig[key] = uniq_values.first
               end
-            elsif key =~ /S$/
+            elsif PLURAL_SETTINGS.include? key
               # Plural build settings
               xcconfig[key] = uniq_values.join(' ')
             else
