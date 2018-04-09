@@ -94,7 +94,7 @@ module Pod
               path = target.xcconfig_path(configuration.name)
               # gen = Generator::XCConfig::AggregateXCConfig.new(target, configuration.name)
               # xcconfig = update_changed_file(gen, path)
-              xcconfig = target.build_settings.xcconfig
+              xcconfig = target.build_settings(configuration.name).xcconfig
               xcconfig.save_as(path)
               target.xcconfigs[configuration.name] = xcconfig
               xcconfig_file_ref = add_file_to_support_group(path)

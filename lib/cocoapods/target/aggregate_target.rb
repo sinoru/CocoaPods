@@ -74,6 +74,14 @@ module Pod
       @xcconfigs = {}
     end
 
+    def build_settings(configuration_name = nil)
+      if configuration_name
+        @build_settings[configuration_name]
+      else
+        @build_settings.each_value.first
+      end
+    end
+
     # @return [Boolean] True if the user_target refers to a
     #         library (framework, static or dynamic lib).
     #
@@ -322,7 +330,13 @@ module Pod
     end
 
     def create_build_settings
-      BuildSettings::Aggregate.new(self, 'release')
+      settings = {}
+
+      user_build_configurations.each_key do |configuration_name|
+        settings[configuration_name] = BuildSettings::Aggregate.new(self, configuration_name)
+      end
+
+      settings
     end
   end
 end

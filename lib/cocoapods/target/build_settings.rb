@@ -90,6 +90,14 @@ module Pod
         ld_flags
       end
 
+      # attribute 'OTHER_LDFLAGS', build_setting: :plural, memoized: true, sorted: false, unique: false do
+
+      # end
+
+      # attribute 'FRAMEWORK_SEARCH_PATHS', build_setting: :plural, memoized: true, sorted: true, unique: true do
+
+      # end
+
       memoized build_setting def other_swift_flags
         return unless target.uses_swift?
         %w[-D COCOAPODS] + module_map_files.flat_map {|f| ['-Xcc', "-fmodule-map-file=#{f}"] }
@@ -174,19 +182,6 @@ module Pod
         end.join(' ')
       end
 
-      def [](key)
-        @settings[key]
-      end
-
-      def merge_setting(key, value)
-        if PLURAL_SETTINGS.include?(key)
-          @settings[key].concat Array(value)
-        else
-          raise ArgumentError, "#{key} is not plural" if value.is_a?(Array)
-          @settings[key] = value
-        end
-      end
-
       class Pod < BuildSettings
         def self.build_settings_names
           (@build_settings_names ||= []).concat(BuildSettings.build_settings_names)
@@ -268,7 +263,7 @@ module Pod
           if target.requires_frameworks? && !test_xcconfig?
             []
           else
-            target.header_search_paths
+            target.header_search_paths(test_xcconfig?)
           end
         end
 
@@ -279,7 +274,7 @@ module Pod
         memoized build_setting def library_search_paths
           vendored = vendored_library_search_paths
           vendored.concat dependent_targets.flat_map { |t| t.build_settings.library_search_paths_to_import }
-          vendored.tap(&:sort!)
+          vendored.tap(&:sort!).tap(&:uniq!)
         end
 
         memoized def vendored_libraries
@@ -304,7 +299,7 @@ module Pod
           paths = dependent_targets.flat_map { |t| t.build_settings.framework_search_paths_to_import }
           paths.concat vendored_framework_search_paths
           paths.unshift "$(PLATFORM_DIR)/Developer/Library/Frameworks" if test_xcconfig? || frameworks.include?("XCTest") || frameworks.include?("SenTestingKit")
-          paths.tap(&:sort!)
+          paths.tap(&:sort!).tap(&:uniq!)
         end
 
         memoized def vendored_framework_search_paths
@@ -368,7 +363,7 @@ module Pod
           config = {}
 
           spec_consumers.each do |consumer|
-            config.update(consumer.pod_target_xcconfig)
+            config.update(consumer.pod_target_xcconfig) # TODO resolve conflicts
           end
 
           config
@@ -401,7 +396,7 @@ module Pod
           define_method(setting) do
             value = pod_targets.flat_map do |pod_target|
               settings = pod_target.build_settings
-              settings.public_send("#{setting}_to_import") + settings.public_send(setting)
+              settings.public_send("#{setting}_to_import") + settings.public_send(setting) # TODO only use _to_import
             end
             value.map!(&:to_s)
             value.uniq!
