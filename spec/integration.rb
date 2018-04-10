@@ -324,7 +324,7 @@ describe_cli 'pod' do
     end
   end
 
-  # #--------------------------------------#
+  #--------------------------------------#
 
   describe 'Pod update' do
     describe 'Updates an existing installation' do
@@ -338,7 +338,7 @@ describe_cli 'pod' do
     end
   end
 
-  # #--------------------------------------#
+  #--------------------------------------#
 
   describe 'Pod lint' do
     describe 'Lints a Pod from source with a prepare_command' do
