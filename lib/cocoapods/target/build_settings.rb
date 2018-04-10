@@ -244,7 +244,11 @@ module Pod
         end
 
         memoized def libraries_to_import
-          if !target.requires_frameworks? && target.should_build?
+          if !target.should_build?
+            return libraries
+          end
+
+          if !target.requires_frameworks?
             [target.product_basename]
           else
             []
@@ -252,6 +256,10 @@ module Pod
         end
 
         memoized def frameworks_to_import
+          if !target.should_build?
+            return frameworks
+          end
+
           if target.requires_frameworks? && target.should_build?
             [target.product_basename]
           else
@@ -263,7 +271,7 @@ module Pod
           if target.requires_frameworks? && !test_xcconfig?
             []
           else
-            target.header_search_paths(test_xcconfig?)
+            target.header_search_paths(test_xcconfig?).sort
           end
         end
 
@@ -274,6 +282,7 @@ module Pod
         memoized build_setting def library_search_paths
           vendored = vendored_library_search_paths
           vendored.concat dependent_targets.flat_map { |t| t.build_settings.library_search_paths_to_import }
+          vendored.delete(target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE)) unless test_xcconfig?
           vendored.tap(&:sort!).tap(&:uniq!)
         end
 
@@ -297,6 +306,7 @@ module Pod
 
         memoized build_setting def framework_search_paths
           paths = dependent_targets.flat_map { |t| t.build_settings.framework_search_paths_to_import }
+          paths.delete(target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE)) unless test_xcconfig?
           paths.concat vendored_framework_search_paths
           paths.unshift "$(PLATFORM_DIR)/Developer/Library/Frameworks" if test_xcconfig? || frameworks.include?("XCTest") || frameworks.include?("SenTestingKit")
           paths.tap(&:sort!).tap(&:uniq!)
@@ -354,7 +364,7 @@ module Pod
         end
 
         memoized def dependent_targets
-          targets = target.dependent_targets
+          targets = target.recursive_dependent_targets
           targets += [target] if test_xcconfig?
           targets
         end
@@ -407,21 +417,30 @@ module Pod
           memoized(setting)
         end
 
+        def self.from_search_paths_aggregate_targets(setting)
+          method = instance_method(setting)
+          define_method(setting) do
+            value = method.bind(self).call + target.search_paths_aggregate_targets.flat_map {|t| t.build_settings(configuration_name).send(setting) }
+            value.uniq.sort
+          end
+          memoized(setting)
+        end
+
         memoized def xcconfig
           super.merge(merged_user_target_xcconfigs)
         end
 
         from_pod_targets :libraries
 
-        from_pod_targets :library_search_paths
+        from_search_paths_aggregate_targets from_pod_targets :library_search_paths
 
-        from_pod_targets :frameworks
+        from_search_paths_aggregate_targets from_pod_targets :frameworks
 
-        build_setting from_pod_targets :framework_search_paths
+        build_setting from_search_paths_aggregate_targets from_pod_targets :framework_search_paths
 
-        from_pod_targets :swift_include_paths
+        from_search_paths_aggregate_targets from_pod_targets :swift_include_paths
 
-        memoized def header_search_paths
+        from_search_paths_aggregate_targets def header_search_paths
           if target.requires_frameworks?
             if pod_targets.all?(&:should_build?)
               []
@@ -438,10 +457,15 @@ module Pod
         end
 
         memoized def other_cflags
-          super + header_search_paths.flat_map {|p| ['-isystem', p] } +
-            pod_targets.select {|pt| pt.should_build? && pt.requires_frameworks? }.flat_map do |target|
-              ['-iquote', "#{target.build_product_path}/Headers"]
-            end
+          super +
+            header_search_paths.flat_map {|p| ['-isystem', p] } +
+            framework_header_paths_for_iquote.flat_map {|p| ['-iquote', p] }
+        end
+
+        from_search_paths_aggregate_targets def framework_header_paths_for_iquote
+          pod_targets.
+            select {|pt| pt.should_build? && pt.requires_frameworks? }.
+            map {|pt| "#{pt.build_product_path}/Headers" }
         end
 
         memoized build_setting def pods_root
@@ -450,7 +474,9 @@ module Pod
 
         memoized build_setting def ld_runpath_search_paths
           return unless target.requires_frameworks? || vendored_dynamic_artifacts.any?
-          _ld_runpath_search_paths(requires_host_target: target.requires_host_target?)
+          symbol_type = target.user_targets.map(&:symbol_type).uniq.first
+          test_bundle = symbol_type == :octest_bundle || symbol_type == :unit_test_bundle || symbol_type == :ui_test_bundle
+          _ld_runpath_search_paths(requires_host_target: target.requires_host_target?, test_bundle: test_bundle)
         end
 
         memoized def vendored_dynamic_artifacts
@@ -462,7 +488,7 @@ module Pod
           includes_static_libs ||= pod_targets.flat_map(&:file_accessors).any? { |fa| !fa.vendored_static_artifacts.empty? }
         end
 
-        memoized def module_map_files
+        from_search_paths_aggregate_targets memoized def module_map_files
           pod_targets.map {|t| t.build_settings.module_map_file_to_import }.compact.sort
         end
 
