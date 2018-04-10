@@ -210,12 +210,14 @@ module Pod
         memoized add_to_import_if_test def frameworks
           vendored = vendored_frameworks.map {|l| File.basename(l, '.framework') }
           vendored.concat spec_consumers.flat_map(&:frameworks)
+          vendored.concat dependent_targets.flat_map {|pt| pt.should_build? ? [] : pt.build_settings.frameworks }
           vendored.tap(&:uniq!).tap(&:sort!)
         end
 
         memoized add_to_import_if_test def libraries
           vendored = vendored_libraries.map {|l| File.basename(l, l.extname).sub(/\Alib/, '') }
           vendored.concat spec_consumers.flat_map(&:libraries)
+          vendored.concat dependent_targets.flat_map {|pt| pt.should_build? ? [] : pt.build_settings.libraries }
           vendored.tap(&:uniq!).tap(&:sort!)
         end
 
