@@ -207,6 +207,8 @@ module Pod
           []
         end
 
+        # TODO: partition dynamic/static artifacts that are in here, only specify the dynamic ones in here and put the static things in _to_import
+
         memoized add_to_import_if_test def frameworks
           vendored = vendored_frameworks.map {|l| File.basename(l, '.framework') }
           vendored.concat spec_consumers.flat_map(&:frameworks)
