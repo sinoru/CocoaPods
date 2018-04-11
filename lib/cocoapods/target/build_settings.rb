@@ -2,16 +2,27 @@ module Pod
   class Target
     class BuildSettings
       PLURAL_SETTINGS = Set.new %w[
+        ALTERNATE_PERMISSIONS_FILES
+        ARCHS
+        BUILD_VARIANTS
+        EXCLUDED_SOURCE_FILE_NAMES
         FRAMEWORK_SEARCH_PATHS
         GCC_PREPROCESSOR_DEFINITIONS
+        GCC_PREPROCESSOR_DEFINITIONS_NOT_USED_IN_PRECOMPS
         HEADER_SEARCH_PATHS
+        INFOPLIST_PREPROCESSOR_DEFINITIONS
         LD_RUNPATH_SEARCH_PATHS
         LIBRARY_SEARCH_PATHS
         OTHER_CFLAGS
+        OTHER_CPLUSPLUSFLAGS
         OTHER_LDFLAGS
         OTHER_SWIFT_FLAGS
+        REZ_SEARCH_PATHS
+        SECTORDER_FLAGS
         SWIFT_ACTIVE_COMPILATION_CONDITIONS
         SWIFT_INCLUDE_PATHS
+        WARNING_CFLAGS
+        WARNING_LDFLAGS
       ]
 
       CONFIGURATION_BUILD_DIR_VARIABLE = '${PODS_CONFIGURATION_BUILD_DIR}'.freeze
@@ -25,6 +36,10 @@ module Pod
         end
 
         method_name
+      end
+
+      def __clear__
+        @__memoized = nil
       end
 
       def self.build_setting(method_name)
@@ -78,15 +93,19 @@ module Pod
         false
       end
 
+      def requires_fobjc_arc?
+        false
+      end
+
       memoized build_setting def other_ldflags
         ld_flags = []
         ld_flags << '-ObjC' if requires_objc_linker_flag?
-        if target.podfile.set_arc_compatibility_flag? &&
-            target.spec_consumers.any?(&:requires_arc?)
+        if requires_fobjc_arc?
           ld_flags << '-fobjc-arc'
         end
         libraries.each {|l| ld_flags << %(-l"#{l}") }
         frameworks.each {|f| ld_flags << '-framework' << %("#{f}") }
+        weak_frameworks.each {|f| ld_flags << '-weak_framework' << %("#{f}") }
         ld_flags
       end
 
@@ -142,6 +161,11 @@ module Pod
       memoized def xcconfig
         settings = add_inherited_to_plural(to_h)
         Xcodeproj::Config.new(settings)
+      end
+
+      def generate
+        __clear__
+        xcconfig
       end
 
       def save_as(path)
@@ -201,6 +225,11 @@ module Pod
           @test_xcconfig = test_xcconfig
         end
 
+        def __clear__
+          super
+          dependent_targets.each { |pt| pt.build_settings.__clear__ }
+        end
+
         def test_xcconfig?; @test_xcconfig; end
 
         def swift_active_compilation_conditions
@@ -212,14 +241,20 @@ module Pod
         memoized add_to_import_if_test def frameworks
           vendored = vendored_frameworks.map {|l| File.basename(l, '.framework') }
           vendored.concat spec_consumers.flat_map(&:frameworks)
-          vendored.concat dependent_targets.flat_map {|pt| pt.should_build? ? [] : pt.build_settings.frameworks }
+          vendored.concat dependent_targets.flat_map {|pt| pt.should_build? ? [] : pt.build_settings.frameworks_to_import }
           vendored.tap(&:uniq!).tap(&:sort!)
+        end
+
+        memoized add_to_import_if_test def weak_frameworks
+          weak_frameworks = spec_consumers.flat_map(&:weak_frameworks)
+          weak_frameworks.concat dependent_targets.flat_map {|pt| pt.should_build? ? [] : pt.build_settings.weak_frameworks_to_import }
+          weak_frameworks.tap(&:uniq!).tap(&:sort!)
         end
 
         memoized add_to_import_if_test def libraries
           vendored = vendored_libraries.map {|l| File.basename(l, l.extname).sub(/\Alib/, '') }
           vendored.concat spec_consumers.flat_map(&:libraries)
-          vendored.concat dependent_targets.flat_map {|pt| pt.should_build? ? [] : pt.build_settings.libraries }
+          vendored.concat dependent_targets.flat_map {|pt| !test_xcconfig? && pt.should_build? ? [] : pt.build_settings.libraries_to_import }
           vendored.tap(&:uniq!).tap(&:sort!)
         end
 
@@ -271,12 +306,16 @@ module Pod
           end
         end
 
-        memoized def header_search_paths
-          if target.requires_frameworks? && !test_xcconfig?
-            []
-          else
-            target.header_search_paths(test_xcconfig?).sort
+        memoized def weak_frameworks_to_import
+          if !target.should_build?
+            return weak_frameworks
           end
+
+          []
+        end
+
+        memoized def header_search_paths
+          target.header_search_paths(test_xcconfig?).sort
         end
 
         memoized def xcconfig
@@ -358,6 +397,11 @@ module Pod
           test_xcconfig?
         end
 
+        memoized def requires_fobjc_arc?
+          target.podfile.set_arc_compatibility_flag? &&
+            file_accessors.any? { |fa| fa.spec_consumer.requires_arc? }
+        end
+
         build_setting def product_bundle_identifier
           'org.cocoapods.${PRODUCT_NAME:rfc1034identifier}'
         end
@@ -369,7 +413,7 @@ module Pod
 
         memoized def dependent_targets
           targets = target.recursive_dependent_targets
-          targets += [target] if test_xcconfig?
+          targets += [target].concat(target.recursive_test_dependent_targets) if test_xcconfig?
           targets
         end
 
@@ -424,7 +468,11 @@ module Pod
         def self.from_search_paths_aggregate_targets(setting)
           method = instance_method(setting)
           define_method(setting) do
-            value = method.bind(self).call + target.search_paths_aggregate_targets.flat_map {|t| t.build_settings(configuration_name).send(setting) }
+            value = method.bind(self).call
+            value += target.search_paths_aggregate_targets.flat_map do |aggregate_target|
+              build_settings = aggregate_target.build_settings(configuration_name) || raise("#{aggregate_target.inspect} has no build settings for configuration #{configuration_name.inspect}")
+              build_settings.send(setting)
+            end
             value.uniq.sort
           end
           memoized(setting)
@@ -432,6 +480,12 @@ module Pod
 
         memoized def xcconfig
           super.merge(merged_user_target_xcconfigs)
+        end
+
+        def __clear__
+          super
+          pod_targets.each { |pt| pt.build_settings.__clear__ }
+          target.search_paths_aggregate_targets.each { |at| at.build_settings(configuration_name).__clear__ }
         end
 
         from_pod_targets :libraries
@@ -490,6 +544,11 @@ module Pod
         memoized def requires_objc_linker_flag?
           includes_static_libs = !target.requires_frameworks?
           includes_static_libs ||= pod_targets.flat_map(&:file_accessors).any? { |fa| !fa.vendored_static_artifacts.empty? }
+        end
+
+        memoized def requires_fobjc_arc?
+          target.podfile.set_arc_compatibility_flag? &&
+            target.spec_consumers.any?(&:requires_arc?)
         end
 
         from_search_paths_aggregate_targets memoized def module_map_files

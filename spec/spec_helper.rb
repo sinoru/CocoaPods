@@ -136,7 +136,7 @@ end
 
 def fixture_aggregate_target(pod_targets = [], target_definition = nil)
   target_definition ||= pod_targets.flat_map(&:target_definitions).first || fixture_target_definition
-  Pod::AggregateTarget.new(config.sandbox, false, {}, [], target_definition, config.sandbox.root.dirname, nil, nil, pod_targets)
+  Pod::AggregateTarget.new(config.sandbox, false, { 'Release' => :release }, [], target_definition, config.sandbox.root.dirname, nil, nil, pod_targets)
 end
 
 #-----------------------------------------------------------------------------#
