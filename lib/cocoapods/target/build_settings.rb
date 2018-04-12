@@ -236,26 +236,56 @@ module Pod
           []
         end
 
-        # TODO: partition dynamic/static artifacts that are in here, only specify the dynamic ones in here and put the static things in _to_import
-
         memoized add_to_import_if_test def frameworks
-          vendored = vendored_frameworks.map {|l| File.basename(l, '.framework') }
-          vendored.concat spec_consumers.flat_map(&:frameworks)
-          vendored.concat dependent_targets.flat_map {|pt| pt.should_build? ? [] : pt.build_settings.frameworks_to_import } if target.requires_frameworks? && !target.static_framework? || test_xcconfig?
-          vendored.tap(&:uniq!).tap(&:sort!)
+          return [] if (!target.requires_frameworks? || target.static_framework?) && !test_xcconfig?
+
+          frameworks = vendored_dynamic_frameworks.map {|l| File.basename(l, '.framework') }
+          frameworks.concat spec_consumers.flat_map(&:frameworks)
+          frameworks.concat dependent_targets.flat_map { |pt| pt.build_settings.dynamic_frameworks_to_import }
+          frameworks.concat dependent_targets.flat_map { |pt| pt.build_settings.static_frameworks_to_import } if test_xcconfig?
+          frameworks.tap(&:uniq!).tap(&:sort!)
         end
 
-        memoized add_to_import_if_test def weak_frameworks
+        memoized def static_frameworks_to_import
+          static_frameworks_to_import = vendored_static_frameworks.map { |f| File.basename(f, '.framework') }
+          static_frameworks_to_import << target.product_basename if target.should_build? && target.requires_frameworks? && target.static_framework?
+          static_frameworks_to_import
+        end
+
+        memoized def dynamic_frameworks_to_import
+          dynamic_frameworks_to_import = vendored_dynamic_frameworks.map { |f| File.basename(f, '.framework') }
+          dynamic_frameworks_to_import << target.product_basename if target.should_build? && target.requires_frameworks? && !target.static_framework?
+          dynamic_frameworks_to_import.concat spec_consumers.flat_map(&:frameworks)
+          dynamic_frameworks_to_import
+        end
+
+        memoized def weak_frameworks
+          return [] if (!target.requires_frameworks? || target.static_framework?) && !test_xcconfig?
+
           weak_frameworks = spec_consumers.flat_map(&:weak_frameworks)
-          weak_frameworks.concat dependent_targets.flat_map {|pt| pt.should_build? ? [] : pt.build_settings.weak_frameworks_to_import } if target.requires_frameworks? && !target.static_framework? || test_xcconfig?
+          weak_frameworks.concat dependent_targets.flat_map { |pt| pt.build_settings.weak_frameworks_to_import }
           weak_frameworks.tap(&:uniq!).tap(&:sort!)
         end
 
         memoized add_to_import_if_test def libraries
-          vendored = vendored_libraries.map {|l| File.basename(l, l.extname).sub(/\Alib/, '') }
-          vendored.concat spec_consumers.flat_map(&:libraries)
-          vendored.concat dependent_targets.flat_map {|pt| !test_xcconfig? && pt.should_build? ? [] : pt.build_settings.libraries_to_import } if target.requires_frameworks? && !target.static_framework? || test_xcconfig?
-          vendored.tap(&:uniq!).tap(&:sort!)
+          return [] if (!target.requires_frameworks? || target.static_framework?) && !test_xcconfig?
+
+          libraries = vendored_dynamic_libraries.map { |l| File.basename(l, l.extname).sub(/\Alib/, '') }
+          libraries.concat spec_consumers.flat_map(&:libraries)
+          libraries.concat dependent_targets.flat_map { |pt| pt.build_settings.dynamic_libraries_to_import }
+          libraries.concat dependent_targets.flat_map { |pt| pt.build_settings.static_libraries_to_import } if test_xcconfig?
+          libraries.tap(&:uniq!).tap(&:sort!)
+        end
+
+        memoized def static_libraries_to_import
+          static_libraries_to_import = vendored_static_libraries.map { |l| File.basename(l, l.extname).sub(/\Alib/, '') }
+          static_libraries_to_import << target.product_basename if target.should_build? && !target.requires_frameworks?
+          static_libraries_to_import
+        end
+
+        memoized def dynamic_libraries_to_import
+          vendored_dynamic_libraries.map { |l| File.basename(l, l.extname).sub(/\Alib/, '') } +
+            spec_consumers.flat_map(&:libraries)
         end
 
         memoized def module_map_files
@@ -283,34 +313,14 @@ module Pod
         end
 
         memoized def libraries_to_import
-          if !target.should_build?
-            return libraries
-          end
-
-          if !target.requires_frameworks?
-            [target.product_basename]
-          else
-            []
-          end
+          static_libraries_to_import + dynamic_libraries_to_import
         end
 
         memoized def frameworks_to_import
-          if !target.should_build?
-            return frameworks
-          end
-
-          if target.requires_frameworks? && target.should_build?
-            [target.product_basename]
-          else
-            []
-          end
+          static_frameworks_to_import + dynamic_frameworks_to_import
         end
 
         memoized def weak_frameworks_to_import
-          if !target.should_build?
-            return weak_frameworks
-          end
-
           []
         end
 
@@ -323,33 +333,55 @@ module Pod
         end
 
         memoized build_setting def library_search_paths
-          vendored = vendored_library_search_paths
-          vendored.concat dependent_targets.flat_map { |t| t.build_settings.library_search_paths_to_import }
-          vendored.delete(target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE)) unless test_xcconfig?
+          vendored = vendored_dynamic_library_search_paths
+          vendored.concat dependent_targets.flat_map { |t| t.build_settings.vendored_dynamic_library_search_paths }
+          if test_xcconfig?
+            vendored.concat dependent_targets.flat_map { |t| t.build_settings.library_search_paths_to_import }
+            vendored.concat library_search_paths_to_import
+          else
+            vendored.delete(target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE))
+          end
           vendored.tap(&:sort!).tap(&:uniq!)
         end
 
-        memoized def vendored_libraries
-          file_accessors.flat_map(&:vendored_libraries)
+        memoized def vendored_static_libraries
+          file_accessors.flat_map(&:vendored_static_libraries)
         end
 
-        memoized def vendored_frameworks
-          file_accessors.flat_map(&:vendored_frameworks)
+        memoized def vendored_dynamic_libraries
+          file_accessors.flat_map(&:vendored_dynamic_libraries)
         end
 
-        memoized def vendored_library_search_paths
-          vendored_libraries.map {|f| File.join '${PODS_ROOT}', f.dirname.relative_path_from(target.sandbox.root) }
+        memoized def vendored_static_frameworks
+          file_accessors.flat_map(&:vendored_static_frameworks)
+        end
+
+        memoized def vendored_dynamic_frameworks
+          file_accessors.flat_map(&:vendored_dynamic_frameworks)
+        end
+
+        memoized def vendored_static_library_search_paths
+          vendored_static_libraries.map {|f| File.join '${PODS_ROOT}', f.dirname.relative_path_from(target.sandbox.root) }
+        end
+
+        memoized def vendored_dynamic_library_search_paths
+          vendored_dynamic_libraries.map {|f| File.join '${PODS_ROOT}', f.dirname.relative_path_from(target.sandbox.root) }
         end
 
         memoized def library_search_paths_to_import
+          vendored_library_search_paths = vendored_static_library_search_paths  + vendored_dynamic_library_search_paths
           return vendored_library_search_paths unless !target.requires_frameworks? && target.should_build?
 
-          vendored_library_search_paths + [target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE)]
+          vendored_library_search_paths << target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE)
         end
 
         memoized build_setting def framework_search_paths
           paths = dependent_targets.flat_map { |t| t.build_settings.framework_search_paths_to_import }
-          paths.delete(target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE)) unless test_xcconfig?
+          if test_xcconfig?
+            paths.concat framework_search_paths_to_import
+          else
+            paths.delete(target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE))
+          end
           paths.concat vendored_framework_search_paths
           paths.unshift "$(PLATFORM_DIR)/Developer/Library/Frameworks" if frameworks.include?("XCTest") || frameworks.include?("SenTestingKit")
           paths.tap(&:sort!).tap(&:uniq!)
@@ -495,6 +527,7 @@ module Pod
         from_search_paths_aggregate_targets from_pod_targets :library_search_paths
 
         from_search_paths_aggregate_targets from_pod_targets :frameworks
+        from_search_paths_aggregate_targets from_pod_targets :weak_frameworks
 
         build_setting from_search_paths_aggregate_targets from_pod_targets :framework_search_paths
 
