@@ -252,7 +252,7 @@ module Pod
             @coconut_pod_target.test_dependent_targets = [@banana_pod_target]
             generator = Pod.new(@coconut_pod_target, true)
             xcconfig = generator.generate
-            xcconfig.to_hash['FRAMEWORK_SEARCH_PATHS'].should == '$(inherited) "$(PLATFORM_DIR)/Developer/Library/Frameworks" "${PODS_ROOT}/../../spec/fixtures/banana-lib"'
+            xcconfig.to_hash['FRAMEWORK_SEARCH_PATHS'].should == '$(inherited) "${PODS_ROOT}/../../spec/fixtures/banana-lib"'
             xcconfig.to_hash['LIBRARY_SEARCH_PATHS'].should == '$(inherited) "${PODS_CONFIGURATION_BUILD_DIR}/BananaLib" "${PODS_CONFIGURATION_BUILD_DIR}/CoconutLib" "${PODS_ROOT}/../../spec/fixtures/banana-lib"'
           end
 
@@ -261,7 +261,7 @@ module Pod
             @coconut_pod_target.test_dependent_targets = [@banana_pod_target]
             generator = Pod.new(@coconut_pod_target, true)
             xcconfig = generator.generate
-            xcconfig.to_hash['FRAMEWORK_SEARCH_PATHS'].should == '$(inherited) "$(PLATFORM_DIR)/Developer/Library/Frameworks" "${PODS_ROOT}/../../spec/fixtures/banana-lib"'
+            xcconfig.to_hash['FRAMEWORK_SEARCH_PATHS'].should == '$(inherited) "${PODS_ROOT}/../../spec/fixtures/banana-lib"'
             xcconfig.to_hash['LIBRARY_SEARCH_PATHS'].should == '$(inherited) "${PODS_CONFIGURATION_BUILD_DIR}/BananaLib" "${PODS_CONFIGURATION_BUILD_DIR}/CoconutLib" "${PODS_ROOT}/../../spec/fixtures/banana-lib"'
           end
 

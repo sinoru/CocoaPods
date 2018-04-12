@@ -241,20 +241,20 @@ module Pod
         memoized add_to_import_if_test def frameworks
           vendored = vendored_frameworks.map {|l| File.basename(l, '.framework') }
           vendored.concat spec_consumers.flat_map(&:frameworks)
-          vendored.concat dependent_targets.flat_map {|pt| pt.should_build? ? [] : pt.build_settings.frameworks_to_import }
+          vendored.concat dependent_targets.flat_map {|pt| pt.should_build? ? [] : pt.build_settings.frameworks_to_import } if target.requires_frameworks? && !target.static_framework? || test_xcconfig?
           vendored.tap(&:uniq!).tap(&:sort!)
         end
 
         memoized add_to_import_if_test def weak_frameworks
           weak_frameworks = spec_consumers.flat_map(&:weak_frameworks)
-          weak_frameworks.concat dependent_targets.flat_map {|pt| pt.should_build? ? [] : pt.build_settings.weak_frameworks_to_import }
+          weak_frameworks.concat dependent_targets.flat_map {|pt| pt.should_build? ? [] : pt.build_settings.weak_frameworks_to_import } if target.requires_frameworks? && !target.static_framework? || test_xcconfig?
           weak_frameworks.tap(&:uniq!).tap(&:sort!)
         end
 
         memoized add_to_import_if_test def libraries
           vendored = vendored_libraries.map {|l| File.basename(l, l.extname).sub(/\Alib/, '') }
           vendored.concat spec_consumers.flat_map(&:libraries)
-          vendored.concat dependent_targets.flat_map {|pt| !test_xcconfig? && pt.should_build? ? [] : pt.build_settings.libraries_to_import }
+          vendored.concat dependent_targets.flat_map {|pt| !test_xcconfig? && pt.should_build? ? [] : pt.build_settings.libraries_to_import } if target.requires_frameworks? && !target.static_framework? || test_xcconfig?
           vendored.tap(&:uniq!).tap(&:sort!)
         end
 
@@ -351,7 +351,7 @@ module Pod
           paths = dependent_targets.flat_map { |t| t.build_settings.framework_search_paths_to_import }
           paths.delete(target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE)) unless test_xcconfig?
           paths.concat vendored_framework_search_paths
-          paths.unshift "$(PLATFORM_DIR)/Developer/Library/Frameworks" if test_xcconfig? || frameworks.include?("XCTest") || frameworks.include?("SenTestingKit")
+          paths.unshift "$(PLATFORM_DIR)/Developer/Library/Frameworks" if frameworks.include?("XCTest") || frameworks.include?("SenTestingKit")
           paths.tap(&:sort!).tap(&:uniq!)
         end
 
@@ -412,9 +412,11 @@ module Pod
         end
 
         memoized def dependent_targets
-          targets = target.recursive_dependent_targets
-          targets += [target].concat(target.recursive_test_dependent_targets) if test_xcconfig?
-          targets
+          if test_xcconfig?
+            target.all_dependent_targets
+          else
+            target.recursive_dependent_targets
+          end
         end
 
         memoized def pod_target_xcconfig
