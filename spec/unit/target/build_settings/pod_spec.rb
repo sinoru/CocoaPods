@@ -182,6 +182,39 @@ module Pod
             generated = Xcodeproj::Config.new(path)
             generated.class.should == Xcodeproj::Config
           end
+
+          it 'does propagate framework or libraries' do
+            spec = stub('spec', :test_specification? => false)
+            consumer = stub('consumer',
+                            :libraries => ['xml2'],
+                            :frameworks => ['XCTest'],
+                            :weak_frameworks => [],
+                            :spec => spec,
+                            )
+            file_accessor = stub('file_accessor',
+                                  :spec => spec,
+                                  :spec_consumer => consumer,
+                                  :vendored_static_frameworks => [config.sandbox.root + 'StaticFramework.framework'],
+                                  :vendored_static_libraries => [config.sandbox.root + 'StaticLibrary.a'],
+                                  :vendored_dynamic_frameworks => [config.sandbox.root + 'VendoredFramework.framework'],
+                                  :vendored_dynamic_libraries => [config.sandbox.root + 'VendoredDyld.dyld'],
+                                )
+            pod_target = stub('pod_target',
+                              :file_accessors => [file_accessor],
+                              :spec_consumers => [consumer],
+                              :requires_frameworks? => true,
+                              :static_framework? => true,
+                              :dependent_targets => [],
+                              :recursive_dependent_targets => [],
+                              :sandbox => config.sandbox,
+                              :should_build? => true,
+                              )
+            pod_target.stubs(:build_settings => Pod.new(pod_target, false))
+            @generator.spec_consumers.each { |sc| sc.stubs(:frameworks => [])}
+            @generator.stubs(:dependent_targets => [pod_target])
+            @generator.__clear__
+            @generator.other_ldflags.should.be == %w(-l"VendoredDyld" -l"xml2" -framework "VendoredFramework" -framework "XCTest" -weak_framework "iAd")
+          end
         end
 
         describe 'test xcconfig generation' do

@@ -390,9 +390,9 @@ module Pod
           if test_xcconfig?
             paths.concat framework_search_paths_to_import
           else
+            paths.concat vendored_framework_search_paths
             paths.delete(target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE))
           end
-          paths.concat vendored_framework_search_paths
           paths.tap(&:sort!).tap(&:uniq!)
         end
 
