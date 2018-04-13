@@ -69,6 +69,14 @@ module Pod
         []
       end
 
+      build_setting def framework_search_paths
+        if frameworks.include?("XCTest") || frameworks.include?("SenTestingKit")
+          [ "$(PLATFORM_DIR)/Developer/Library/Frameworks" ]
+        else
+          []
+        end
+      end
+
       memoized build_setting def other_cflags
         module_map_files.map {|f| "-fmodule-map-file=#{f}" }
       end
@@ -119,7 +127,8 @@ module Pod
 
       memoized build_setting def other_swift_flags
         return unless target.uses_swift?
-        %w[-D COCOAPODS] + module_map_files.flat_map {|f| ['-Xcc', "-fmodule-map-file=#{f}"] }
+        flags = %w[-D COCOAPODS]
+        flags.concat module_map_files.flat_map {|f| ['-Xcc', "-fmodule-map-file=#{f}"] }
       end
 
       build_setting def swift_active_compilation_conditions
@@ -376,14 +385,14 @@ module Pod
         end
 
         memoized build_setting def framework_search_paths
-          paths = dependent_targets.flat_map { |t| t.build_settings.framework_search_paths_to_import }
+          paths = super
+          paths.concat dependent_targets.flat_map { |t| t.build_settings.framework_search_paths_to_import }
           if test_xcconfig?
             paths.concat framework_search_paths_to_import
           else
             paths.delete(target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE))
           end
           paths.concat vendored_framework_search_paths
-          paths.unshift "$(PLATFORM_DIR)/Developer/Library/Frameworks" if frameworks.include?("XCTest") || frameworks.include?("SenTestingKit")
           paths.tap(&:sort!).tap(&:uniq!)
         end
 
@@ -399,12 +408,12 @@ module Pod
 
         memoized build_setting def other_swift_flags
           return unless target.uses_swift?
-          super +
-            if !target.requires_frameworks? && target.defines_module? && !test_xcconfig?
-              %w[ -import-underlying-module -Xcc -fmodule-map-file=${SRCROOT}/${MODULEMAP_FILE} ]
-            else
-              []
-            end
+          flags = super
+          flags << '-suppress-warnings' if target.inhibit_warnings?
+          if !target.requires_frameworks? && target.defines_module? && !test_xcconfig?
+            flags.concat %w[ -import-underlying-module -Xcc -fmodule-map-file=${SRCROOT}/${MODULEMAP_FILE} ]
+          end
+          flags
         end
 
         memoized build_setting def swift_include_paths
